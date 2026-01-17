@@ -1,0 +1,35 @@
+# Path to the test file (Liquid template)
+test-suite = "{{ manifest_dir }}/testcases/{{ bin_alias }}.yml"
+
+[template]
+src = '''
+fn main() {
+    todo!();
+}
+'''
+
+[template.new]
+edition = "2021"
+dependencies = '''
+proconio = { version = "0.4", features = ["derive"] }
+rand = "0.8"
+rand_pcg = "0.3"
+'''
+
+[template.new.copy-files]
+
+[new]
+kind = "cargo-compete"
+platform = "atcoder"
+# hrc/ ディレクトリ内にコンテストごとに作成
+path = "./{{ contest }}"
+
+[test]
+toolchain = "1.70.0"
+profile = "release"
+
+[submit]
+kind = "file"
+path = "{{ src_path }}"
+language_id = "5050"
+
