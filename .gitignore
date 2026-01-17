@@ -1,0 +1,20 @@
+# Rust
+**/target/
+**/Cargo.lock
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# AtCoder / cargo-compete
+**/testcases/
+*.out
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
