@@ -1,0 +1,28 @@
+[package]
+name = "intro-heuristics"
+version = "0.1.0"
+edition = "2021"
+
+[package.metadata.cargo-compete.bin]
+intro-heuristics-a = { alias = "a", problem = "https://atcoder.jp/contests/intro-heuristics/tasks/intro_heuristics_a" }
+intro-heuristics-b = { alias = "b", problem = "https://atcoder.jp/contests/intro-heuristics/tasks/intro_heuristics_b" }
+intro-heuristics-c = { alias = "c", problem = "https://atcoder.jp/contests/intro-heuristics/tasks/intro_heuristics_c" }
+
+[[bin]]
+name = "intro-heuristics-a"
+path = "src/bin/a.rs"
+
+[[bin]]
+name = "intro-heuristics-b"
+path = "src/bin/b.rs"
+
+[[bin]]
+name = "intro-heuristics-c"
+path = "src/bin/c.rs"
+
+[dependencies]
+proconio = { version = "0.4", features = ["derive"] }
+rand = "0.8"
+rand_pcg = "0.3"
+
+[dev-dependencies]
