@@ -57,175 +57,6 @@ fn evaluate_score(
     shops.iter().map(|s| s.len() as i64).sum()
 }
 
-// 近傍解の生成（複数の操作タイプをサポート）
-fn generate_neighbor(
-    solution: &[i32],
-    start_idx: usize,
-    adj: &[Vec<usize>],
-    k: usize,
-    t: usize,
-    rng: &mut impl Rng,
-) -> Option<Vec<i32>> {
-    if start_idx >= solution.len() || solution.is_empty() {
-        return None;
-    }
-
-    let mut neighbor = solution.to_vec();
-    let change_idx = rng.gen_range(start_idx..neighbor.len());
-    let op = neighbor[change_idx];
-
-    // 操作タイプをランダムに選択
-    let op_type = rng.gen_range(0..3);
-
-    match op_type {
-        0 => {
-            // 移動先の変更
-            if op != -1 {
-                // 現在位置を推定
-                let mut current_pos = 0;
-                let mut prev_pos: Option<usize> = None;
-
-                for i in 0..change_idx {
-                    match neighbor[i] {
-                        -1 => {}
-                        next_idx => {
-                            let next = next_idx as usize;
-                            if let Some(prev) = prev_pos {
-                                if next == prev || !adj[current_pos].contains(&next) {
-                                    return None;
-                                }
-                            } else if !adj[current_pos].contains(&next) {
-                                return None;
-                            }
-                            prev_pos = Some(current_pos);
-                            current_pos = next;
-                        }
-                    }
-                }
-
-                let candidates: Vec<usize> = adj[current_pos]
-                    .iter()
-                    .filter(|&&next| {
-                        next != op as usize && prev_pos.map(|p| next != p).unwrap_or(true)
-                    })
-                    .copied()
-                    .collect();
-
-                if !candidates.is_empty() {
-                    neighbor[change_idx] = candidates[rng.gen_range(0..candidates.len())] as i32;
-                    return Some(neighbor);
-                }
-            }
-        }
-        1 => {
-            // Flip操作の追加（移動操作の直後に）
-            if op != -1 {
-                // 現在位置を推定して、その位置が木（k以上）か確認
-                let mut current_pos = 0;
-                let mut prev_pos: Option<usize> = None;
-
-                for i in 0..=change_idx {
-                    match neighbor[i] {
-                        -1 => {}
-                        next_idx => {
-                            let next = next_idx as usize;
-                            if let Some(prev) = prev_pos {
-                                if next == prev || !adj[current_pos].contains(&next) {
-                                    return None;
-                                }
-                            } else if !adj[current_pos].contains(&next) {
-                                return None;
-                            }
-                            prev_pos = Some(current_pos);
-                            current_pos = next;
-                        }
-                    }
-                }
-
-                // 現在位置が木（k以上）の場合、Flip操作を追加
-                if current_pos >= k
-                    && change_idx + 1 < neighbor.len()
-                    && neighbor[change_idx + 1] != -1
-                    && neighbor.len() < t
-                {
-                    neighbor.insert(change_idx + 1, -1);
-                    return Some(neighbor);
-                }
-            }
-        }
-        2 => {
-            // Flip操作の削除
-            if op == -1 {
-                neighbor.remove(change_idx);
-                return Some(neighbor);
-            }
-        }
-        _ => {}
-    }
-
-    None
-}
-
-// 山登り法
-fn hill_climb(
-    n: usize,
-    k: usize,
-    t: usize,
-    adj: &[Vec<usize>],
-    initial_solution: Vec<i32>,
-    initial_ice_type: &[char],
-    time_limit: f64,
-) -> Vec<i32> {
-    let start_time = Instant::now();
-    let mut current = initial_solution;
-    let mut current_score = evaluate_score(n, k, adj, &current, initial_ice_type);
-
-    // 最良解を保持
-    let mut best_solution = current.clone();
-    let mut best_score = current_score;
-
-    let mut rng = thread_rng();
-
-    let window_size = 2000.min(current.len());
-    let start_idx = current.len().saturating_sub(window_size);
-
-    let mut iterations = 0;
-    let mut improvements = 0;
-
-    while start_time.elapsed().as_secs_f64() < time_limit {
-        iterations += 1;
-
-        if let Some(neighbor) = generate_neighbor(&current, start_idx, adj, k, t, &mut rng) {
-            let neighbor_score = evaluate_score(n, k, adj, &neighbor, initial_ice_type);
-
-            // 最良解を更新
-            if neighbor_score > best_score {
-                best_solution = neighbor.clone();
-                best_score = neighbor_score;
-            }
-
-            if neighbor_score > current_score {
-                current = neighbor;
-                current_score = neighbor_score;
-                improvements += 1;
-            }
-        }
-
-        // 100回ごとに時間チェック
-        if iterations % 100 == 0 {
-            if start_time.elapsed().as_secs_f64() >= time_limit {
-                break;
-            }
-        }
-    }
-
-    eprintln!(
-        "Hill climb: {} iterations, {} improvements, current score: {}, best score: {}",
-        iterations, improvements, current_score, best_score
-    );
-    best_solution
-}
-
 fn main() {
     input! {
         n: usize,
@@ -270,8 +101,7 @@ fn main() {
     }
 
     let start_time = Instant::now();
-    let time_limit_total = 1.9; // 総時間制限（秒）
-    let initial_solution_time_limit = 0.1; // 初期解生成に使う時間
+    let initial_solution_time_limit = 1.8; // 初期解生成に使う時間
 
     let mut rng = thread_rng();
     let mut best_initial: Option<(Vec<i32>, i64)> = None;
@@ -343,7 +173,37 @@ fn main() {
                     .collect();
 
                 if !tree_candidates.is_empty() {
-                    next_candidates = tree_candidates;
+                    // より多くのショップから到達可能な木を優先
+                    // 各木について、その木に到達可能なショップのうち、まだ未納品の組み合わせが多いショップの数をカウント
+                    let mut scored_trees: Vec<(usize, usize)> = tree_candidates
+                        .iter()
+                        .map(|&tree| {
+                            let score = (0..k)
+                                .filter(|&shop_id| {
+                                    reachable_trees[shop_id].contains(&tree)
+                                        && shops_local[shop_id].len()
+                                            < reachable_trees[shop_id].len()
+                                })
+                                .count();
+                            (tree, score)
+                        })
+                        .collect();
+
+                    // スコアが高い順にソート
+                    scored_trees.sort_by(|a, b| b.1.cmp(&a.1));
+
+                    // スコアが高い木を優先（同じスコアの場合はランダム）
+                    if !scored_trees.is_empty() && scored_trees[0].1 > 0 {
+                        let max_score = scored_trees[0].1;
+                        let best_trees: Vec<usize> = scored_trees
+                            .iter()
+                            .take_while(|(_, score)| *score == max_score)
+                            .map(|(tree, _)| *tree)
+                            .collect();
+                        next_candidates = best_trees;
+                    } else {
+                        next_candidates = tree_candidates;
+                    }
                 } else {
                     next_candidates = adj[current]
                         .iter()
@@ -374,16 +234,7 @@ fn main() {
         }
     }
 
-    let mut output = best_initial.unwrap_or_else(|| (vec![], 0)).0;
-    let initial_score = evaluate_score(n, k, &adj, &output, &ice_type);
-    eprintln!("Initial solution score: {}", initial_score);
-
-    // 山登り法を適用（残り時間を使用）
-    // コメントアウトして初期解のみを確認
-    // let remaining_time = time_limit_total - start_time.elapsed().as_secs_f64();
-    // if !output.is_empty() && remaining_time > 0.1 {
-    //     output = hill_climb(n, k, t, &adj, output, &ice_type, remaining_time);
-    // }
+    let output = best_initial.unwrap_or_else(|| (vec![], 0)).0;
 
     // 出力
     for op in output {
