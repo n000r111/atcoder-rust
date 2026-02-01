@@ -4,6 +4,211 @@ use rand::thread_rng;
 use std::collections::BTreeSet;
 use std::time::Instant;
 
+// ========================================
+// 状態スナップショット用データ構造
+// ========================================
+
+/// 納品イベントの記録
+#[derive(Clone, Debug)]
+struct DeliveryDelta {
+    shop_id: usize,
+    combination: Vec<char>,
+}
+
+/// 1ステップの変更を表す差分
+#[derive(Clone, Debug)]
+enum StepDelta {
+    Move {
+        from: usize,
+        to: usize,
+        delivery: Option<DeliveryDelta>,
+        harvested: Option<char>,
+    },
+    Flip {
+        node: usize,
+    },
+}
+
+/// フルスナップショット（チェックポイント）
+#[derive(Clone)]
+struct Checkpoint {
+    step: usize,
+    pos: usize,
+    prev: Option<usize>,
+    ice_type: Vec<char>,
+    cone: Vec<char>,
+    shops: Vec<BTreeSet<Vec<char>>>,
+}
+
+impl Checkpoint {
+    fn new(n: usize, k: usize) -> Self {
+        let mut ice_type = vec!['W'; n];
+        for i in 0..k {
+            ice_type[i] = 'S';
+        }
+        Self {
+            step: 0,
+            pos: 0,
+            prev: None,
+            ice_type,
+            cone: Vec::new(),
+            shops: vec![BTreeSet::new(); k],
+        }
+    }
+}
+
+/// 状態履歴管理
+struct StateHistory {
+    checkpoints: Vec<Checkpoint>,
+    deltas: Vec<StepDelta>,
+    checkpoint_interval: usize,
+    #[allow(dead_code)]
+    k: usize,
+    #[allow(dead_code)]
+    n: usize,
+}
+
+impl StateHistory {
+    fn new(n: usize, k: usize, checkpoint_interval: usize) -> Self {
+        let initial_checkpoint = Checkpoint::new(n, k);
+        Self {
+            checkpoints: vec![initial_checkpoint],
+            deltas: Vec::new(),
+            checkpoint_interval,
+            k,
+            n,
+        }
+    }
+
+    /// 指定ステップまでの状態を復元
+    fn restore_to_step(&self, target_step: usize) -> Checkpoint {
+        // target_step以前の最も近いチェックポイントを見つける
+        let checkpoint_idx = (target_step / self.checkpoint_interval).min(self.checkpoints.len() - 1);
+        let mut state = self.checkpoints[checkpoint_idx].clone();
+        let start_step = state.step;
+
+        // チェックポイントからtarget_stepまでの差分を適用
+        for i in start_step..target_step {
+            if i >= self.deltas.len() {
+                break;
+            }
+            match &self.deltas[i] {
+                StepDelta::Move {
+                    from,
+                    to,
+                    delivery,
+                    harvested,
+                } => {
+                    state.prev = Some(*from);
+                    state.pos = *to;
+
+                    if let Some(d) = delivery {
+                        state.shops[d.shop_id].insert(d.combination.clone());
+                        state.cone.clear();
+                    }
+                    if let Some(ice) = harvested {
+                        state.cone.push(*ice);
+                    }
+                }
+                StepDelta::Flip { node } => {
+                    state.ice_type[*node] = 'R';
+                }
+            }
+        }
+        state.step = target_step;
+        state
+    }
+
+    /// 現在の差分数を取得
+    fn len(&self) -> usize {
+        self.deltas.len()
+    }
+}
+
+/// 解からStateHistoryを構築
+fn build_history_from_solution(
+    n: usize,
+    k: usize,
+    adj: &[Vec<usize>],
+    initial_ice_type: &[char],
+    solution: &[i32],
+    checkpoint_interval: usize,
+) -> StateHistory {
+    let mut history = StateHistory::new(n, k, checkpoint_interval);
+    let mut pos = 0usize;
+    let mut prev: Option<usize> = None;
+    let mut ice_type = initial_ice_type.to_vec();
+    let mut cone: Vec<char> = Vec::new();
+    let mut shops: Vec<BTreeSet<Vec<char>>> = vec![BTreeSet::new(); k];
+
+    for (step, &op) in solution.iter().enumerate() {
+        match op {
+            -1 => {
+                if pos >= k && ice_type[pos] == 'W' {
+                    history.deltas.push(StepDelta::Flip { node: pos });
+                    ice_type[pos] = 'R';
+                }
+            }
+            next_idx => {
+                let next = next_idx as usize;
+                // 隣接チェック（無効な場合はスキップ）
+                if !adj[pos].contains(&next) {
+                    continue;
+                }
+                if let Some(prev_pos) = prev {
+                    if next == prev_pos {
+                        continue;
+                    }
+                }
+
+                let delivery = if next < k {
+                    let d = DeliveryDelta {
+                        shop_id: next,
+                        combination: cone.clone(),
+                    };
+                    shops[next].insert(cone.clone());
+                    cone.clear();
+                    Some(d)
+                } else {
+                    None
+                };
+
+                let harvested = if next >= k {
+                    let h = ice_type[next];
+                    cone.push(h);
+                    Some(h)
+                } else {
+                    None
+                };
+
+                history.deltas.push(StepDelta::Move {
+                    from: pos,
+                    to: next,
+                    delivery,
+                    harvested,
+                });
+                prev = Some(pos);
+                pos = next;
+            }
+        }
+
+        // チェックポイント間隔ごとにスナップショットを保存
+        if (step + 1) % checkpoint_interval == 0 {
+            let checkpoint = Checkpoint {
+                step: step + 1,
+                pos,
+                prev,
+                ice_type: ice_type.clone(),
+                cone: cone.clone(),
+                shops: shops.clone(),
+            };
+            history.checkpoints.push(checkpoint);
+        }
+    }
+
+    history
+}
+
 // スコア計算関数
 fn evaluate_score(
     _n: usize,
@@ -266,7 +471,7 @@ fn main() {
     println!();
 }
 
-// 山登り法（変更点以降を再計算）
+// 山登り法（変更点以降を再計算）- スナップショット最適化版
 fn hill_climb(
     n: usize,
     k: usize,
@@ -279,10 +484,20 @@ fn hill_climb(
 ) -> Vec<i32> {
     let start_time = Instant::now();
     let mut rng = thread_rng();
+
+    // チェックポイント間隔（100ステップごとにスナップショット）
+    let checkpoint_interval = 100;
+
+    // 初期解から履歴を構築
+    let mut current_history = build_history_from_solution(
+        n, k, adj, initial_ice_type, &initial_solution, checkpoint_interval
+    );
+
     let mut current_solution = initial_solution;
     let mut current_score = evaluate_score(n, k, adj, &current_solution, initial_ice_type);
     let mut best_solution = current_solution.clone();
     let mut best_score = current_score;
+    let mut best_history = current_history.checkpoints.clone();
 
     let mut iterations = 0;
     let mut no_improvement = 0;
@@ -297,7 +512,7 @@ fn hill_climb(
             }
         }
 
-        // 近傍解を生成（変更点以降を再計算）
+        // 近傍解を生成（スナップショットを使用して高速化）
         let neighbor = generate_neighbor_with_recalc(
             n,
             k,
@@ -306,6 +521,7 @@ fn hill_climb(
             initial_ice_type,
             reachable_trees,
             &current_solution,
+            &current_history,
             &mut rng,
         );
 
@@ -315,6 +531,10 @@ fn hill_climb(
                 // 局所最適解に到達した可能性があるので、リスタート
                 current_solution = best_solution.clone();
                 current_score = best_score;
+                // 履歴も再構築
+                current_history = build_history_from_solution(
+                    n, k, adj, initial_ice_type, &current_solution, checkpoint_interval
+                );
                 no_improvement = 0;
             }
             continue;
@@ -326,12 +546,17 @@ fn hill_climb(
         if neighbor_score > current_score {
             current_solution = neighbor;
             current_score = neighbor_score;
+            // 履歴を再構築
+            current_history = build_history_from_solution(
+                n, k, adj, initial_ice_type, &current_solution, checkpoint_interval
+            );
             no_improvement = 0;
 
             // 最良解を更新
             if current_score > best_score {
                 best_solution = current_solution.clone();
                 best_score = current_score;
+                best_history = current_history.checkpoints.clone();
             }
         } else {
             no_improvement += 1;
@@ -339,6 +564,10 @@ fn hill_climb(
                 // 局所最適解に到達した可能性があるので、リスタート
                 current_solution = best_solution.clone();
                 current_score = best_score;
+                // 履歴も再構築（保存していたチェックポイントを使用）
+                current_history = build_history_from_solution(
+                    n, k, adj, initial_ice_type, &current_solution, checkpoint_interval
+                );
                 no_improvement = 0;
             }
         }
@@ -348,11 +577,12 @@ fn hill_climb(
         "Hill climbing: {} iterations, best score: {}",
         iterations, best_score
     );
+    let _ = best_history; // 将来の差分スコアリング用
 
     best_solution
 }
 
-// 近傍解を生成（変更点以降を再計算）
+// 近傍解を生成（変更点以降を再計算）- スナップショット最適化版
 fn generate_neighbor_with_recalc(
     n: usize,
     k: usize,
@@ -361,6 +591,7 @@ fn generate_neighbor_with_recalc(
     initial_ice_type: &[char],
     reachable_trees: &[Vec<usize>],
     solution: &[i32],
+    history: &StateHistory,
     rng: &mut impl Rng,
 ) -> Vec<i32> {
     if solution.is_empty() {
@@ -376,45 +607,51 @@ fn generate_neighbor_with_recalc(
         rng.gen_range(0..solution.len())
     };
 
-    // 変更点までの状態を再現
-    let mut pos = 0;
-    let mut prev: Option<usize> = None;
-    let mut ice_type = initial_ice_type.to_vec();
-    let mut cone = Vec::new();
-    let mut shops: Vec<BTreeSet<Vec<char>>> = vec![BTreeSet::new(); k];
-    let mut prefix = Vec::new();
-
-    for i in 0..change_pos {
-        let op = solution[i];
-        prefix.push(op);
-        match op {
-            -1 => {
-                if pos >= k && ice_type[pos] == 'W' {
-                    ice_type[pos] = 'R';
-                }
-            }
-            next_idx => {
-                let next = next_idx as usize;
-                if let Some(prev_pos) = prev {
-                    if next == prev_pos {
-                        return vec![];
+    // スナップショットから状態を復元（O(checkpoint_interval)で高速）
+    let restored = if change_pos <= history.len() {
+        history.restore_to_step(change_pos)
+    } else {
+        // 履歴が足りない場合は従来通りリプレイ
+        let mut state = Checkpoint::new(n, k);
+        state.ice_type = initial_ice_type.to_vec();
+        for i in 0..change_pos {
+            let op = solution[i];
+            match op {
+                -1 => {
+                    if state.pos >= k && state.ice_type[state.pos] == 'W' {
+                        state.ice_type[state.pos] = 'R';
                     }
                 }
-                if !adj[pos].contains(&next) {
-                    return vec![];
-                }
-                prev = Some(pos);
-                pos = next;
-
-                if pos < k {
-                    shops[pos].insert(cone.clone());
-                    cone.clear();
-                } else {
-                    cone.push(ice_type[pos]);
+                next_idx => {
+                    let next = next_idx as usize;
+                    if let Some(prev_pos) = state.prev {
+                        if next == prev_pos {
+                            return vec![];
+                        }
+                    }
+                    if !adj[state.pos].contains(&next) {
+                        return vec![];
+                    }
+                    state.prev = Some(state.pos);
+                    state.pos = next;
+                    if state.pos < k {
+                        state.shops[state.pos].insert(state.cone.clone());
+                        state.cone.clear();
+                    } else {
+                        state.cone.push(state.ice_type[state.pos]);
+                    }
                 }
             }
         }
-    }
+        state
+    };
+
+    let mut pos = restored.pos;
+    let mut prev = restored.prev;
+    let mut ice_type = restored.ice_type;
+    let mut cone = restored.cone;
+    let mut shops = restored.shops;
+    let prefix: Vec<i32> = solution[0..change_pos].to_vec();
 
     // 変更操作を適用
     let change_type = rng.gen_range(0..3);
