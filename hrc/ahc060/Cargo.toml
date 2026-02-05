@@ -1,0 +1,18 @@
+[package]
+name = "ahc060"
+version = "0.1.0"
+edition = "2021"
+
+[package.metadata.cargo-compete.bin]
+ahc060-a = { alias = "a", problem = "https://atcoder.jp/contests/ahc060/tasks/ahc060_a" }
+
+[[bin]]
+name = "ahc060-a"
+path = "src/bin/a.rs"
+
+[dependencies]
+proconio = { version = "0.4", features = ["derive"] }
+rand = "0.8"
+rand_pcg = "0.3"
+
+[dev-dependencies]
